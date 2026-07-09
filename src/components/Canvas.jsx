@@ -42,7 +42,15 @@ const BaseNode = ({ icon: Icon, title, children, status }) => {
 };
 
 // Standard text nodes
-const TriggerNode = (props) => <BaseNode icon={Play} title={props.data.title || "Manual Trigger"} {...props}>{props.data.description}</BaseNode>;
+const TriggerNode = (props) => (
+  <BaseNode icon={Play} title={props.data.title || "Manual Trigger"} {...props}>
+    <div style={{ marginBottom: 8 }}>{props.data.description}</div>
+    <div style={{ padding: 6, backgroundColor: '#1a1a1a', borderRadius: 4, border: '1px solid #333', fontSize: 10 }}>
+      <div style={{ color: '#888', marginBottom: 2 }}>Webhook URL:</div>
+      <div style={{ fontFamily: 'monospace', color: '#89d185' }}>POST http://localhost:8000/api/webhook/wf-1</div>
+    </div>
+  </BaseNode>
+);
 const ExtractNode = (props) => <BaseNode icon={FileText} title={props.data.title || "Extract Data"} {...props}>{props.data.description}</BaseNode>;
 const OutputNode = (props) => <BaseNode icon={Send} title={props.data.title || "Send Email"} {...props}>{props.data.description}</BaseNode>;
 
@@ -130,6 +138,45 @@ const Canvas = ({ toggleSidebar }) => {
   const [terminalOutput, setTerminalOutput] = useState(['$ ']);
   const [terminalInput, setTerminalInput] = useState('');
   const bottomRef = useRef(null);
+  const wsRef = useRef(null);
+  
+  // Debug Logs State
+  const [debugLogs, setDebugLogs] = useState([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  // Initialize WebSocket connection when terminal opens
+  useEffect(() => {
+    if (showTerminal && !wsRef.current) {
+      wsRef.current = new WebSocket('ws://localhost:8000/ws/terminal');
+      
+      wsRef.current.onmessage = (event) => {
+        const data = event.data;
+        if (data === "CLEAR_TERMINAL") {
+          setTerminalOutput(['$ ']);
+        } else {
+          setTerminalOutput(prev => {
+            const newOutput = [...prev];
+            // Insert before the last '$ ' prompt
+            newOutput.splice(newOutput.length - 1, 0, data);
+            return newOutput;
+          });
+        }
+      };
+      
+      wsRef.current.onclose = () => {
+        setTerminalOutput(prev => {
+          const newOutput = [...prev];
+          newOutput.splice(newOutput.length - 1, 0, "Connection closed.");
+          return newOutput;
+        });
+        wsRef.current = null;
+      };
+    }
+    
+    return () => {
+      // Cleanup happens only on unmount or if we want to explicitly close when hidden
+    };
+  }, [showTerminal]);
 
   useEffect(() => {
     if (bottomRef.current) {
@@ -140,22 +187,24 @@ const Canvas = ({ toggleSidebar }) => {
   const handleCommand = (e) => {
     if (e.key === 'Enter') {
       const cmd = terminalInput.trim();
-      let newOutput = [...terminalOutput];
-      newOutput[newOutput.length - 1] += cmd;
       
-      if (cmd === 'npm run dev') {
-        newOutput.push('> nextjs-portfolio@0.1.0 dev');
-        newOutput.push('> next dev');
-        newOutput.push('ready - started server on 0.0.0.0:3000, url: http://localhost:3000');
-        newOutput.push('event - compiled client and server successfully in 1254 ms');
-      } else if (cmd === 'clear') {
-        newOutput = [];
-      } else if (cmd !== '') {
-        newOutput.push(`bash: ${cmd}: command not found`);
+      setTerminalOutput(prev => {
+        const newOutput = [...prev];
+        newOutput[newOutput.length - 1] += cmd; // Append cmd to the '$ ' line
+        newOutput.push('$ '); // Push new prompt
+        return newOutput;
+      });
+      
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(cmd);
+      } else {
+        setTerminalOutput(prev => {
+          const newOutput = [...prev];
+          newOutput.splice(newOutput.length - 1, 0, "Error: Terminal not connected.");
+          return newOutput;
+        });
       }
       
-      newOutput.push('$ ');
-      setTerminalOutput(newOutput);
       setTerminalInput('');
     }
   };
@@ -163,42 +212,58 @@ const Canvas = ({ toggleSidebar }) => {
   const handleRunWorkflow = async () => {
     setIsExecuting(true);
     
-    // Find agent node to show thinking state
-    const agentNode = actualNodes.find(n => n.type === 'agentNode');
-    if (agentNode) {
-      updateNodeData(agentNode.id, d => ({ ...d, status: 'healing', reasoning: ['Agent: Thinking...'] }));
+    // Simple topological execution simulation
+    // 1. Find root nodes (no incoming edges)
+    const incomingEdges = {};
+    actualEdges.forEach(e => {
+      if (!incomingEdges[e.target]) incomingEdges[e.target] = [];
+      incomingEdges[e.target].push(e);
+    });
+
+    const rootNodes = actualNodes.filter(n => !incomingEdges[n.id]);
+    
+    if (rootNodes.length === 0) {
+      alert("No valid workflow found. Please connect some nodes!");
+      setIsExecuting(false);
+      return;
     }
 
-    try {
-      const response = await fetch('http://localhost:8000/api/execute-agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodes: actualNodes, edges: actualEdges })
-      });
+    // Reset all statuses
+    actualNodes.forEach(n => updateNodeData(n.id, d => ({ ...d, status: undefined })));
+
+    // Simulated execution queue
+    let queue = [...rootNodes];
+    const executed = new Set();
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (executed.has(current.id)) continue;
       
-      const result = await response.json();
+      // Set to processing/healing
+      updateNodeData(current.id, d => ({ ...d, status: 'healing' }));
       
-      if (result.status === 'success' && agentNode) {
-        updateNodeData(agentNode.id, d => ({ 
-          ...d, 
-          status: 'success', 
-          reasoning: result.agent_reasoning 
-        }));
-        
-        // Highlight executed nodes
-        result.nodes_executed.forEach(type => {
-          const node = actualNodes.find(n => n.type === type);
-          if (node) updateNodeData(node.id, d => ({ ...d, status: 'success' }));
-        });
-      } else if (result.status === 'error') {
-        alert(result.message);
-        if (agentNode) updateNodeData(agentNode.id, d => ({ ...d, status: 'error' }));
+      // Simulate network/processing delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Set to success
+      updateNodeData(current.id, d => ({ ...d, status: 'success' }));
+      executed.add(current.id);
+
+      // Find children
+      const childrenEdges = actualEdges.filter(e => e.source === current.id);
+      for (const edge of childrenEdges) {
+        const targetNode = actualNodes.find(n => n.id === edge.target);
+        if (targetNode && !executed.has(targetNode.id)) {
+          // Check if all dependencies of target are met
+          const targetIncoming = incomingEdges[targetNode.id] || [];
+          const allDepsMet = targetIncoming.every(e => executed.has(e.source));
+          if (allDepsMet && !queue.includes(targetNode)) {
+            queue.push(targetNode);
+          }
+        }
       }
-    } catch (error) {
-      alert("Failed to connect to FastAPI backend. Is it running on port 8000?");
-      if (agentNode) updateNodeData(agentNode.id, d => ({ ...d, status: 'error' }));
     }
-    
+
     setIsExecuting(false);
   };
 
@@ -211,6 +276,21 @@ const Canvas = ({ toggleSidebar }) => {
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setShowDebug(!showDebug)}
+            style={{ 
+              backgroundColor: showDebug ? '#2d2d2d' : 'transparent', 
+              color: 'var(--text-primary)', 
+              border: '1px solid var(--border-color)', 
+              padding: '6px 12px', 
+              borderRadius: 6, 
+              cursor: 'pointer',
+              fontSize: 12
+            }}
+          >
+            Debug Logs
+          </button>
+
           <button 
             onClick={() => setShowTerminal(!showTerminal)}
             style={{ 
@@ -288,6 +368,29 @@ const Canvas = ({ toggleSidebar }) => {
           <Background variant="dots" gap={12} size={1} color="var(--border-color)" />
         </ReactFlow>
       </div>
+
+      {/* Debug Logs Side Panel */}
+      {showDebug && (
+        <div style={{ width: 350, borderLeft: '1px solid var(--border-color)', backgroundColor: '#1e1e1e', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', fontWeight: 'bold', fontSize: 13 }}>
+            Execution Logs
+          </div>
+          <div style={{ padding: 16 }}>
+            {debugLogs.length === 0 ? (
+              <div style={{ color: '#888', fontSize: 12 }}>No executions yet.</div>
+            ) : (
+              debugLogs.map((log, i) => (
+                <div key={i} style={{ marginBottom: 16, padding: 12, backgroundColor: '#252526', borderRadius: 6, border: '1px solid #333' }}>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>{log.timestamp}</div>
+                  <pre style={{ margin: 0, fontSize: 10, color: '#d4d4d4', overflowX: 'auto' }}>
+                    {JSON.stringify(log.response, null, 2)}
+                  </pre>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Integrated Terminal Panel */}
       {showTerminal && (

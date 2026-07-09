@@ -19,13 +19,44 @@ export const WorkflowProvider = ({ children }) => {
   const [history, setHistory] = useState([{ nodes: initialNodes, edges: initialEdges }]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
-  // Save state to history on meaningful changes (debounced/simplified for demo)
-  const saveToHistory = useCallback((newNodes, newEdges) => {
-    setHistory(prev => {
-      const newHistory = prev.slice(0, historyIndex + 1);
-      return [...newHistory, { nodes: newNodes, edges: newEdges }];
+  // Fetch from backend on load
+  useEffect(() => {
+    fetch('http://localhost:8000/api/workflow')
+      .then(res => res.json())
+      .then(data => {
+        if (data.nodes && data.nodes.length > 0) {
+          setNodes(data.nodes);
+          setEdges(data.edges);
+          setHistory([{ nodes: data.nodes, edges: data.edges }]);
+        }
+      })
+      .catch(err => console.error("Failed to load workflow", err));
+  }, []);
+
+  // Save to backend function
+  const saveWorkflowToBackend = async (currentNodes, currentEdges) => {
+    try {
+      await fetch('http://localhost:8000/api/workflow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: currentNodes, edges: currentEdges })
+      });
+    } catch (err) {
+      console.error("Failed to save workflow", err);
+    }
+  };
+
+  const pushHistory = useCallback((newNodes, newEdges) => {
+    setHistory((prev) => {
+      const sliced = prev.slice(0, historyIndex + 1);
+      const newState = [...sliced, { nodes: newNodes, edges: newEdges }];
+      
+      // Auto-save to backend when history updates
+      saveWorkflowToBackend(newNodes, newEdges);
+      
+      return newState;
     });
-    setHistoryIndex(prev => prev + 1);
+    setHistoryIndex((prev) => prev + 1);
   }, [historyIndex]);
 
   const addNode = useCallback((type, title, description) => {
@@ -45,12 +76,12 @@ export const WorkflowProvider = ({ children }) => {
           const newEdge = { id: `e${nds.length}-${newNodes.length}`, source: nds[nds.length - 1].id, target: newNode.id, animated: true };
           newEdges = [...eds, newEdge];
         }
-        saveToHistory(newNodes, newEdges);
+        pushHistory(newNodes, newEdges);
         return newEdges;
       });
       return newNodes;
     });
-  }, [setNodes, setEdges, saveToHistory]);
+  }, [setNodes, setEdges, pushHistory]);
 
   const updateNodeData = useCallback((id, dataUpdater) => {
     setNodes(nds => {
@@ -60,20 +91,20 @@ export const WorkflowProvider = ({ children }) => {
         }
         return n;
       });
-      saveToHistory(newNodes, edges);
+      pushHistory(newNodes, edges);
       return newNodes;
     });
-  }, [setNodes, edges, saveToHistory]);
+  }, [setNodes, edges, pushHistory]);
 
   const onConnect = useCallback(
     (params) => {
       setEdges((eds) => {
         const newEdges = addEdge({ ...params, animated: true }, eds);
-        saveToHistory(nodes, newEdges);
+        pushHistory(nodes, newEdges);
         return newEdges;
       });
     },
-    [setEdges, nodes, saveToHistory],
+    [setEdges, nodes, pushHistory],
   );
 
   return (

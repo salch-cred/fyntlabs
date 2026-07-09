@@ -1,44 +1,76 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import Canvas from './components/Canvas';
+import Login from './components/Login';
+import { WorkflowProvider } from './context/WorkflowContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { PagesProvider } from './context/PagesContext';
 import { Menu } from 'lucide-react';
+import './index.css';
 
-function App() {
-  const [isSidebarOpen, setSidebarOpen] = useState(true);
+const ProtectedRoute = ({ children }) => {
+  const { user, isLoading } = useAuth();
+  
+  if (isLoading) {
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>Loading...</div>;
+  }
+  
+  if (!user) {
+    return <Login />;
+  }
+  
+  return children;
+};
+
+const AppContent = () => {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [theme, setTheme] = useState('dark');
 
-  const toggleSidebar = () => {
-    setSidebarOpen(!isSidebarOpen);
-  };
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
-  const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    document.documentElement.setAttribute('data-theme', newTheme);
-  };
+  const toggleTheme = () => setTheme(theme === 'light' ? 'dark' : 'light');
 
   return (
-    <Router>
+    <ProtectedRoute>
       <div className="flex h-full w-full">
-        <Sidebar isOpen={isSidebarOpen} theme={theme} toggleTheme={toggleTheme} />
+        <Sidebar isOpen={sidebarOpen} theme={theme} toggleTheme={toggleTheme} />
         
         <main className="main-content">
-          {!isSidebarOpen && (
-            <button className="toggle-sidebar" onClick={toggleSidebar}>
-              <Menu size={20} />
-            </button>
-          )}
-          
+          <button 
+            className="toggle-sidebar" 
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            style={{ opacity: sidebarOpen ? 0 : 1 }}
+          >
+            <Menu size={20} />
+          </button>
+
           <Routes>
-            <Route path="/" element={<Editor toggleSidebar={isSidebarOpen ? toggleSidebar : undefined} />} />
-            <Route path="/canvas" element={<Canvas toggleSidebar={isSidebarOpen ? toggleSidebar : undefined} />} />
+            <Route path="/" element={<Editor toggleSidebar={sidebarOpen} />} />
+            <Route path="/page/:id" element={<Editor toggleSidebar={sidebarOpen} />} />
+            <Route path="/canvas" element={<Canvas title="Workflow Automation" toggleSidebar={sidebarOpen} />} />
           </Routes>
         </main>
       </div>
-    </Router>
+    </ProtectedRoute>
   );
-}
+};
+
+const App = () => {
+  return (
+    <AuthProvider>
+      <PagesProvider>
+        <WorkflowProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </WorkflowProvider>
+      </PagesProvider>
+    </AuthProvider>
+  );
+};
 
 export default App;
