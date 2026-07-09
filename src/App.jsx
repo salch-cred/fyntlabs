@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import Canvas from './components/Canvas';
 import Login from './components/Login';
+import ErrorBoundary from './components/ErrorBoundary';
 import { WorkflowProvider } from './context/WorkflowContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { PagesProvider } from './context/PagesContext';
@@ -61,15 +62,17 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <AuthProvider>
-      <PagesProvider>
-        <WorkflowProvider>
-          <Router>
-            <AppContent />
-          </Router>
-        </WorkflowProvider>
-      </PagesProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <PagesProvider>
+          <WorkflowProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </WorkflowProvider>
+        </PagesProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 };
 

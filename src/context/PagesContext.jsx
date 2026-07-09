@@ -23,8 +23,18 @@ export const PagesProvider = ({ children }) => {
     setPages(pages.map(p => p.id === id ? { ...p, title } : p));
   };
 
+  const deletePage = async (id) => {
+    if (id === 'getting-started') return; // protect the default landing page
+    setPages(prev => prev.filter(p => p.id !== id));
+    try {
+      await fetch(`http://localhost:8000/api/documents/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error('Failed to delete document on server:', err);
+    }
+  };
+
   return (
-    <PagesContext.Provider value={{ pages, addPage, updatePageTitle }}>
+    <PagesContext.Provider value={{ pages, addPage, updatePageTitle, deletePage }}>
       {children}
     </PagesContext.Provider>
   );

@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 backend/*.db  
 backend/__pycache__  
+backend/venv
+*.png
+test_*.py
