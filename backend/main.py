@@ -3,15 +3,19 @@ import json
 import sys
 import io
 import contextlib
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, Request
+import uuid
+from datetime import datetime, timezone
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from database import engine, SessionLocal, Base
 import models
 from pydantic import BaseModel
 
 Base.metadata.create_all(bind=engine)
+
+DEFAULT_WORKFLOW_ID = "default"
 
 app = FastAPI()
 
@@ -86,29 +90,85 @@ def delete_document(page_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
-# --- Workflow Endpoints ---
-@app.get("/api/workflow")
-def get_workflow(db: Session = Depends(get_db)):
-    nodes = db.query(models.WorkflowNode).all()
-    edges = db.query(models.WorkflowEdge).all()
+# --- Workflow Endpoints (multiple named workflows, like Gumloop's flows) ---
+
+def ensure_default_workflow(db: Session):
+    wf = db.query(models.Workflow).filter(models.Workflow.id == DEFAULT_WORKFLOW_ID).first()
+    if not wf:
+        wf = models.Workflow(id=DEFAULT_WORKFLOW_ID, name="Workflow Automation", created_at=datetime.now(timezone.utc).isoformat())
+        db.add(wf)
+        db.commit()
+    return wf
+
+@app.get("/api/workflows")
+def list_workflows(db: Session = Depends(get_db)):
+    ensure_default_workflow(db)
+    workflows = db.query(models.Workflow).all()
+    return [{"id": w.id, "name": w.name, "created_at": w.created_at} for w in workflows]
+
+class WorkflowCreateData(BaseModel):
+    name: Optional[str] = "Untitled Workflow"
+
+@app.post("/api/workflows")
+def create_workflow(payload: WorkflowCreateData, db: Session = Depends(get_db)):
+    new_id = str(uuid.uuid4())[:8]
+    wf = models.Workflow(id=new_id, name=payload.name or "Untitled Workflow", created_at=datetime.now(timezone.utc).isoformat())
+    db.add(wf)
+    db.commit()
+    return {"id": wf.id, "name": wf.name, "created_at": wf.created_at}
+
+class WorkflowRenameData(BaseModel):
+    name: str
+
+@app.post("/api/workflows/{workflow_id}/rename")
+def rename_workflow(workflow_id: str, payload: WorkflowRenameData, db: Session = Depends(get_db)):
+    wf = db.query(models.Workflow).filter(models.Workflow.id == workflow_id).first()
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    wf.name = payload.name
+    db.commit()
+    return {"status": "success"}
+
+@app.delete("/api/workflows/{workflow_id}")
+def delete_workflow(workflow_id: str, db: Session = Depends(get_db)):
+    if workflow_id == DEFAULT_WORKFLOW_ID:
+        raise HTTPException(status_code=400, detail="Cannot delete the default workflow")
+    db.query(models.WorkflowNode).filter(models.WorkflowNode.workflow_id == workflow_id).delete()
+    db.query(models.WorkflowEdge).filter(models.WorkflowEdge.workflow_id == workflow_id).delete()
+    db.query(models.Workflow).filter(models.Workflow.id == workflow_id).delete()
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/workflows/{workflow_id}/graph")
+def get_workflow_graph(workflow_id: str, db: Session = Depends(get_db)):
+    if workflow_id == DEFAULT_WORKFLOW_ID:
+        ensure_default_workflow(db)
+    nodes = db.query(models.WorkflowNode).filter(models.WorkflowNode.workflow_id == workflow_id).all()
+    edges = db.query(models.WorkflowEdge).filter(models.WorkflowEdge.workflow_id == workflow_id).all()
     return {
         "nodes": [{"id": n.id, "type": n.type, "position": n.position, "data": n.data} for n in nodes],
         "edges": [{"id": e.id, "source": e.source, "target": e.target} for e in edges]
     }
 
-@app.post("/api/workflow")
-def save_workflow(data: WorkflowSaveData, db: Session = Depends(get_db)):
-    db.query(models.WorkflowNode).delete()
-    db.query(models.WorkflowEdge).delete()
-    
+@app.post("/api/workflows/{workflow_id}/graph")
+def save_workflow_graph(workflow_id: str, data: WorkflowSaveData, db: Session = Depends(get_db)):
+    wf = db.query(models.Workflow).filter(models.Workflow.id == workflow_id).first()
+    if not wf:
+        default_name = "Workflow Automation" if workflow_id == DEFAULT_WORKFLOW_ID else "Untitled Workflow"
+        wf = models.Workflow(id=workflow_id, name=default_name, created_at=datetime.now(timezone.utc).isoformat())
+        db.add(wf)
+
+    db.query(models.WorkflowNode).filter(models.WorkflowNode.workflow_id == workflow_id).delete()
+    db.query(models.WorkflowEdge).filter(models.WorkflowEdge.workflow_id == workflow_id).delete()
+
     for node in data.nodes:
-        db_node = models.WorkflowNode(id=node.id, type=node.type, position=node.position, data=node.data)
+        db_node = models.WorkflowNode(id=node.id, workflow_id=workflow_id, type=node.type, position=node.position, data=node.data)
         db.add(db_node)
-        
+
     for edge in data.edges:
-        db_edge = models.WorkflowEdge(id=edge.id, source=edge.source, target=edge.target)
+        db_edge = models.WorkflowEdge(id=edge.id, workflow_id=workflow_id, source=edge.source, target=edge.target)
         db.add(db_edge)
-        
+
     db.commit()
     return {"status": "success"}
 
