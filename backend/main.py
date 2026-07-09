@@ -79,6 +79,13 @@ def save_documents(page_id: str, data: PageSaveData, db: Session = Depends(get_d
     db.commit()
     return {"status": "success"}
 
+@app.delete("/api/documents/{page_id}")
+def delete_document(page_id: str, db: Session = Depends(get_db)):
+    db.query(models.DocumentBlock).filter(models.DocumentBlock.page_id == page_id).delete()
+    db.query(models.Page).filter(models.Page.id == page_id).delete()
+    db.commit()
+    return {"status": "success"}
+
 # --- Workflow Endpoints ---
 @app.get("/api/workflow")
 def get_workflow(db: Session = Depends(get_db)):

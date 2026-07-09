@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
 
 :root {
   /* Dark Mode default for Premium Feel */
@@ -65,6 +66,14 @@ h3 { font-size: 1.5rem; }
 p {
   line-height: 1.6;
   margin-bottom: 1rem;
+}
+
+/* Spin animation (used for loading/executing indicators) */
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
 /* Utility Classes */

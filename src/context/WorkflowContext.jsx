@@ -14,10 +14,18 @@ const initialEdges = [];
 export const WorkflowProvider = ({ children }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  
-  // Time Travel State
-  const [history, setHistory] = useState([{ nodes: initialNodes, edges: initialEdges }]);
-  const [historyIndex, setHistoryIndex] = useState(0);
+
+  // Time Travel State — history and the current pointer are kept in ONE state
+  // object so every update is derived atomically from the true latest state.
+  // (Keeping them as two separate useState calls allowed rapid, synchronous
+  // pushHistory calls — e.g. resetting many node statuses in a loop — to read
+  // a stale `historyIndex` closure and corrupt the array, crashing the app
+  // with "Cannot read properties of undefined (reading 'nodes')".)
+  const [timeline, setTimeline] = useState({
+    history: [{ nodes: initialNodes, edges: initialEdges }],
+    index: 0,
+  });
+  const { history, index: historyIndex } = timeline;
 
   // Fetch from backend on load
   useEffect(() => {
@@ -27,11 +35,11 @@ export const WorkflowProvider = ({ children }) => {
         if (data.nodes && data.nodes.length > 0) {
           setNodes(data.nodes);
           setEdges(data.edges);
-          setHistory([{ nodes: data.nodes, edges: data.edges }]);
+          setTimeline({ history: [{ nodes: data.nodes, edges: data.edges }], index: 0 });
         }
       })
       .catch(err => console.error("Failed to load workflow", err));
-  }, []);
+  }, [setNodes, setEdges]);
 
   // Save to backend function
   const saveWorkflowToBackend = async (currentNodes, currentEdges) => {
@@ -46,18 +54,18 @@ export const WorkflowProvider = ({ children }) => {
     }
   };
 
+  // Appends a new snapshot to the timeline. Always derives the insertion
+  // point from `prev` (the truly latest queued state), never from an
+  // outside closure, so it stays correct even when called multiple times
+  // synchronously in the same tick (e.g. a forEach over many nodes).
   const pushHistory = useCallback((newNodes, newEdges) => {
-    setHistory((prev) => {
-      const sliced = prev.slice(0, historyIndex + 1);
-      const newState = [...sliced, { nodes: newNodes, edges: newEdges }];
-      
-      // Auto-save to backend when history updates
-      saveWorkflowToBackend(newNodes, newEdges);
-      
-      return newState;
+    saveWorkflowToBackend(newNodes, newEdges);
+    setTimeline((prev) => {
+      const sliced = prev.history.slice(0, prev.index + 1);
+      const newHistory = [...sliced, { nodes: newNodes, edges: newEdges }];
+      return { history: newHistory, index: newHistory.length - 1 };
     });
-    setHistoryIndex((prev) => prev + 1);
-  }, [historyIndex]);
+  }, []);
 
   const addNode = useCallback((type, title, description) => {
     setNodes(nds => {
@@ -91,21 +99,38 @@ export const WorkflowProvider = ({ children }) => {
         }
         return n;
       });
-      pushHistory(newNodes, edges);
+      setEdges(eds => {
+        pushHistory(newNodes, eds);
+        return eds;
+      });
       return newNodes;
     });
-  }, [setNodes, edges, pushHistory]);
+  }, [setNodes, setEdges, pushHistory]);
+
+  // Replace the entire graph (e.g. after AI-generating a workflow from a document)
+  const loadWorkflow = useCallback((newNodes, newEdges) => {
+    setNodes(newNodes);
+    setEdges(newEdges);
+    pushHistory(newNodes, newEdges);
+  }, [setNodes, setEdges, pushHistory]);
 
   const onConnect = useCallback(
     (params) => {
       setEdges((eds) => {
         const newEdges = addEdge({ ...params, animated: true }, eds);
-        pushHistory(nodes, newEdges);
+        setNodes(nds => {
+          pushHistory(nds, newEdges);
+          return nds;
+        });
         return newEdges;
       });
     },
-    [setEdges, nodes, pushHistory],
+    [setEdges, setNodes, pushHistory],
   );
+
+  const setHistoryIndex = useCallback((newIndex) => {
+    setTimeline(prev => ({ ...prev, index: newIndex }));
+  }, []);
 
   return (
     <WorkflowContext.Provider value={{
@@ -118,6 +143,7 @@ export const WorkflowProvider = ({ children }) => {
       onConnect,
       addNode,
       updateNodeData,
+      loadWorkflow,
       history,
       historyIndex,
       setHistoryIndex,
