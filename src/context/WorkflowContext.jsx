@@ -11,9 +11,17 @@ const initialNodes = [
 
 const initialEdges = [];
 
+const DEFAULT_WORKFLOW_ID = 'default';
+
 export const WorkflowProvider = ({ children }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Which saved workflow ("flow") is currently open, and the list of all
+  // saved workflows (like Gumloop's multiple flows / Notion's multiple pages)
+  const [currentWorkflowId, setCurrentWorkflowId] = useState(DEFAULT_WORKFLOW_ID);
+  const [workflowList, setWorkflowList] = useState([]);
+  const [isLoadingGraph, setIsLoadingGraph] = useState(true);
 
   // Time Travel State — history and the current pointer are kept in ONE state
   // object so every update is derived atomically from the true latest state.
@@ -27,24 +35,38 @@ export const WorkflowProvider = ({ children }) => {
   });
   const { history, index: historyIndex } = timeline;
 
-  // Fetch from backend on load
+  // Load the list of saved workflows once on mount
+  const refreshWorkflowList = useCallback(() => {
+    fetch('http://localhost:8000/api/workflows')
+      .then(res => res.json())
+      .then(list => setWorkflowList(list))
+      .catch(err => console.error('Failed to load workflow list', err));
+  }, []);
+
   useEffect(() => {
-    fetch('http://localhost:8000/api/workflow')
+    refreshWorkflowList();
+  }, [refreshWorkflowList]);
+
+  // Load the graph for whichever workflow is currently selected
+  useEffect(() => {
+    setIsLoadingGraph(true);
+    fetch(`http://localhost:8000/api/workflows/${currentWorkflowId}/graph`)
       .then(res => res.json())
       .then(data => {
-        if (data.nodes && data.nodes.length > 0) {
-          setNodes(data.nodes);
-          setEdges(data.edges);
-          setTimeline({ history: [{ nodes: data.nodes, edges: data.edges }], index: 0 });
-        }
+        const loadedNodes = data.nodes && data.nodes.length > 0 ? data.nodes : (currentWorkflowId === DEFAULT_WORKFLOW_ID ? initialNodes : []);
+        const loadedEdges = data.edges || [];
+        setNodes(loadedNodes);
+        setEdges(loadedEdges);
+        setTimeline({ history: [{ nodes: loadedNodes, edges: loadedEdges }], index: 0 });
       })
-      .catch(err => console.error("Failed to load workflow", err));
-  }, [setNodes, setEdges]);
+      .catch(err => console.error('Failed to load workflow graph', err))
+      .finally(() => setIsLoadingGraph(false));
+  }, [currentWorkflowId, setNodes, setEdges]);
 
-  // Save to backend function
-  const saveWorkflowToBackend = async (currentNodes, currentEdges) => {
+  // Save to backend function — always writes to the currently open workflow
+  const saveWorkflowToBackend = useCallback(async (currentNodes, currentEdges) => {
     try {
-      await fetch('http://localhost:8000/api/workflow', {
+      await fetch(`http://localhost:8000/api/workflows/${currentWorkflowId}/graph`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nodes: currentNodes, edges: currentEdges })
@@ -52,7 +74,7 @@ export const WorkflowProvider = ({ children }) => {
     } catch (err) {
       console.error("Failed to save workflow", err);
     }
-  };
+  }, [currentWorkflowId]);
 
   // Appends a new snapshot to the timeline. Always derives the insertion
   // point from `prev` (the truly latest queued state), never from an
@@ -65,23 +87,37 @@ export const WorkflowProvider = ({ children }) => {
       const newHistory = [...sliced, { nodes: newNodes, edges: newEdges }];
       return { history: newHistory, index: newHistory.length - 1 };
     });
-  }, []);
+  }, [saveWorkflowToBackend]);
 
-  const addNode = useCallback((type, title, description) => {
+  // Snapshot + persist whatever the latest nodes/edges are right now, without
+  // changing them. Used after drag-stop and keyboard deletions, where
+  // ReactFlow has already mutated local state via onNodesChange/onEdgesChange
+  // and we just need to record + save that result.
+  const persistCurrentGraph = useCallback(() => {
+    setNodes(nds => {
+      setEdges(eds => {
+        pushHistory(nds, eds);
+        return eds;
+      });
+      return nds;
+    });
+  }, [setNodes, setEdges, pushHistory]);
+
+  const addNode = useCallback((type, title, description, position) => {
     setNodes(nds => {
       const newNode = {
-        id: (nds.length + 1).toString(),
+        id: `${Date.now()}`,
         type,
-        position: { x: 250, y: nds.length * 150 + 50 },
+        position: position || { x: 250 + Math.round(Math.random() * 80), y: nds.length * 150 + 50 },
         data: { description, title }
       };
       const newNodes = [...nds, newNode];
-      
-      // Auto-connect to last node
+
+      // Auto-connect to last node when adding from the editor's inline shortcuts
       setEdges(eds => {
         let newEdges = eds;
-        if (nds.length > 0) {
-          const newEdge = { id: `e${nds.length}-${newNodes.length}`, source: nds[nds.length - 1].id, target: newNode.id, animated: true };
+        if (nds.length > 0 && !position) {
+          const newEdge = { id: `e-${nds[nds.length - 1].id}-${newNode.id}`, source: nds[nds.length - 1].id, target: newNode.id, animated: true };
           newEdges = [...eds, newEdge];
         }
         pushHistory(newNodes, newEdges);
@@ -104,6 +140,29 @@ export const WorkflowProvider = ({ children }) => {
         return eds;
       });
       return newNodes;
+    });
+  }, [setNodes, setEdges, pushHistory]);
+
+  const deleteNode = useCallback((id) => {
+    setNodes(nds => {
+      const newNodes = nds.filter(n => n.id !== id);
+      setEdges(eds => {
+        const newEdges = eds.filter(e => e.source !== id && e.target !== id);
+        pushHistory(newNodes, newEdges);
+        return newEdges;
+      });
+      return newNodes;
+    });
+  }, [setNodes, setEdges, pushHistory]);
+
+  const deleteEdge = useCallback((id) => {
+    setEdges(eds => {
+      const newEdges = eds.filter(e => e.id !== id);
+      setNodes(nds => {
+        pushHistory(nds, newEdges);
+        return nds;
+      });
+      return newEdges;
     });
   }, [setNodes, setEdges, pushHistory]);
 
@@ -132,6 +191,41 @@ export const WorkflowProvider = ({ children }) => {
     setTimeline(prev => ({ ...prev, index: newIndex }));
   }, []);
 
+  // --- Multi-workflow management (like Gumloop's multiple flows) ---
+  const switchWorkflow = useCallback((id) => {
+    setCurrentWorkflowId(id || DEFAULT_WORKFLOW_ID);
+  }, []);
+
+  const createWorkflow = useCallback(async (name) => {
+    const res = await fetch('http://localhost:8000/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || 'Untitled Workflow' })
+    });
+    const wf = await res.json();
+    setWorkflowList(prev => [...prev, wf]);
+    setCurrentWorkflowId(wf.id);
+    return wf;
+  }, []);
+
+  const renameWorkflow = useCallback(async (id, name) => {
+    await fetch(`http://localhost:8000/api/workflows/${id}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    setWorkflowList(prev => prev.map(w => w.id === id ? { ...w, name } : w));
+  }, []);
+
+  const deleteWorkflow = useCallback(async (id) => {
+    if (id === DEFAULT_WORKFLOW_ID) return;
+    await fetch(`http://localhost:8000/api/workflows/${id}`, { method: 'DELETE' });
+    setWorkflowList(prev => prev.filter(w => w.id !== id));
+    if (currentWorkflowId === id) {
+      setCurrentWorkflowId(DEFAULT_WORKFLOW_ID);
+    }
+  }, [currentWorkflowId]);
+
   return (
     <WorkflowContext.Provider value={{
       nodes: history[historyIndex].nodes,
@@ -143,11 +237,22 @@ export const WorkflowProvider = ({ children }) => {
       onConnect,
       addNode,
       updateNodeData,
+      deleteNode,
+      deleteEdge,
+      persistCurrentGraph,
       loadWorkflow,
       history,
       historyIndex,
       setHistoryIndex,
-      isTimeTraveling: historyIndex < history.length - 1
+      isTimeTraveling: historyIndex < history.length - 1,
+      isLoadingGraph,
+      currentWorkflowId,
+      workflowList,
+      switchWorkflow,
+      createWorkflow,
+      renameWorkflow,
+      deleteWorkflow,
+      refreshWorkflowList,
     }}>
       {children}
     </WorkflowContext.Provider>
