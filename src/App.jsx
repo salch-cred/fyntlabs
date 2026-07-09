@@ -53,6 +53,7 @@ const AppContent = () => {
             <Route path="/" element={<Editor toggleSidebar={sidebarOpen} />} />
             <Route path="/page/:id" element={<Editor toggleSidebar={sidebarOpen} />} />
             <Route path="/canvas" element={<Canvas title="Workflow Automation" toggleSidebar={sidebarOpen} />} />
+            <Route path="/canvas/:workflowId" element={<Canvas title="Workflow Automation" toggleSidebar={sidebarOpen} />} />
           </Routes>
         </main>
       </div>

@@ -23,8 +23,16 @@ export const PagesProvider = ({ children }) => {
     setPages(pages.map(p => p.id === id ? { ...p, title } : p));
   };
 
+  const updatePageIcon = (id, icon) => {
+    setPages(pages.map(p => p.id === id ? { ...p, icon } : p));
+  };
+
+  const toggleFavorite = (id) => {
+    setPages(pages.map(p => p.id === id ? { ...p, isFavorite: !p.isFavorite } : p));
+  };
+
   const deletePage = async (id) => {
-    if (id === 'getting-started') return; // protect the default landing page
+    if (id === 'getting-started') return;
     setPages(prev => prev.filter(p => p.id !== id));
     try {
       await fetch(`http://localhost:8000/api/documents/${id}`, { method: 'DELETE' });
@@ -34,7 +42,7 @@ export const PagesProvider = ({ children }) => {
   };
 
   return (
-    <PagesContext.Provider value={{ pages, addPage, updatePageTitle, deletePage }}>
+    <PagesContext.Provider value={{ pages, addPage, updatePageTitle, updatePageIcon, toggleFavorite, deletePage }}>
       {children}
     </PagesContext.Provider>
   );
