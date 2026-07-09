@@ -4,21 +4,21 @@ import {
   Search, 
   Settings, 
   PlusCircle, 
-  FileText, 
   Share2, 
   Moon, 
   Sun,
   ChevronsLeft,
   LogOut,
   X,
-  File
+  File,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePages } from '../context/PagesContext';
 
 const Sidebar = ({ isOpen, theme, toggleTheme }) => {
   const { user, logout } = useAuth();
-  const { pages, addPage } = usePages();
+  const { pages, addPage, deletePage } = usePages();
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState('account');
@@ -61,10 +61,34 @@ const Sidebar = ({ isOpen, theme, toggleTheme }) => {
         
         <div style={{ padding: '0 0px', flex: 1, marginTop: 4 }}>
           {pages.map((p) => (
-            <NavLink key={p.id} to={p.id === 'getting-started' ? '/' : `/page/${p.id}`} className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
-              <File size={16} />
-              <span>{p.title || 'Untitled'}</span>
-            </NavLink>
+            <div key={p.id} className="group relative flex items-center">
+              <NavLink
+                to={p.id === 'getting-started' ? '/' : `/page/${p.id}`}
+                className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                <File size={16} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || 'Untitled'}</span>
+              </NavLink>
+              {p.id !== 'getting-started' && (
+                <button
+                  className="opacity-0 group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (window.confirm(`Delete "${p.title || 'Untitled'}"? This cannot be undone.`)) {
+                      const wasActive = window.location.pathname === `/page/${p.id}`;
+                      deletePage(p.id);
+                      if (wasActive) navigate('/');
+                    }
+                  }}
+                  title="Delete page"
+                  style={{ position: 'absolute', right: 8, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
           ))}
           <NavLink to="/canvas" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
             <Share2 size={16} />

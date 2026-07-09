@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   MoreHorizontal, 
   Star, 
-  Clock, 
   MessageSquare,
   PlusCircle, 
   FileText, 
@@ -40,7 +39,7 @@ const Editor = ({ toggleSidebar }) => {
   const { id } = useParams();
   const pageId = id || 'getting-started';
   const { updatePageTitle } = usePages();
-  const { addNode } = useWorkflow();
+  const { addNode, loadWorkflow } = useWorkflow();
   const [title, setTitle] = useState("Getting Started");
   const [blocks, setBlocks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -154,7 +153,8 @@ const Editor = ({ toggleSidebar }) => {
     setBlocks(blocks.map(b => b.id === blockId ? { ...b, content: value } : b));
 
     // Agent Node Generation (Existing V1 logic)
-    if (lowerValue.includes('/workflow') && !blocks.find(b => b.id === blockId).type === 'canvas') {
+    const currentBlock = blocks.find(b => b.id === blockId);
+    if (lowerValue.includes('/workflow') && currentBlock?.type !== 'canvas') {
         setBlocks(blocks.map(b => b.id === blockId ? { ...b, type: 'canvas', content: '' } : b));
         return;
     }
@@ -227,10 +227,12 @@ const Editor = ({ toggleSidebar }) => {
     }
   };
 
+  const [generatingWorkflow, setGeneratingWorkflow] = useState(false);
+
   const handleGenerateWorkflow = async () => {
     // Combine all text blocks
     const fullText = blocks.map(b => b.content).join("\n");
-    setIsLoading(true);
+    setGeneratingWorkflow(true);
     try {
       const response = await fetch('http://localhost:8000/api/generate-workflow', {
         method: 'POST',
@@ -238,18 +240,23 @@ const Editor = ({ toggleSidebar }) => {
         body: JSON.stringify({ text: fullText })
       });
       const data = await response.json();
-      
+
       if (data.status === 'success') {
-        // We will append a Canvas Portal at the bottom with this generated data!
-        // To properly do this, we'd ideally load this into the WorkflowContext.
-        // But since we are creating an inline canvas, let's just create a new block type "canvas".
-        const newBlocks = [...blocks, { id: `b${Date.now()}`, type: 'canvas', content: 'Generated from document' }];
-        setBlocks(newBlocks);
+        // Load the AI-generated nodes/edges into the shared workflow so the
+        // embedded Canvas Portal actually reflects what was generated.
+        loadWorkflow(data.nodes, data.edges);
+
+        // Append a Canvas Portal block (if one doesn't already exist) so the
+        // generated workflow is visible inline in the document.
+        if (!blocks.some(b => b.type === 'canvas')) {
+          const newBlocks = [...blocks, { id: `b${Date.now()}`, type: 'canvas', content: 'Generated from document' }];
+          setBlocks(newBlocks);
+        }
       }
     } catch (err) {
-      console.error(err);
+      console.error("Failed to generate workflow:", err);
     } finally {
-      setIsLoading(false);
+      setGeneratingWorkflow(false);
     }
   };
 
@@ -266,9 +273,11 @@ const Editor = ({ toggleSidebar }) => {
         <div className="flex items-center gap-3">
           <button 
             onClick={handleGenerateWorkflow}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#10b981', color: 'white', padding: '6px 12px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 500 }}
+            disabled={generatingWorkflow}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#10b981', color: 'white', padding: '6px 12px', borderRadius: 4, border: 'none', cursor: generatingWorkflow ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 500, opacity: generatingWorkflow ? 0.7 : 1 }}
           >
-            <Wand2 size={14} /> AI: Generate Workflow
+            {generatingWorkflow ? <RefreshCw size={14} className="animate-spin" /> : <Wand2 size={14} />}
+            {generatingWorkflow ? 'Generating...' : 'AI: Generate Workflow'}
           </button>
           <span className="text-secondary" style={{ fontSize: 12 }}>Edited just now</span>
           <div className="icon-btn" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, width: 'auto', padding: '0 8px' }}>
@@ -349,7 +358,6 @@ const Editor = ({ toggleSidebar }) => {
                     className="flex-1 outline-none relative"
                     style={{ 
                       minHeight: '24px',
-                      padding: '4px 0',
                       fontSize: block.type === 'h1' ? '2em' : block.type === 'h2' ? '1.5em' : '1em',
                       fontWeight: block.type === 'h1' || block.type === 'h2' ? 'bold' : 'normal',
                       fontFamily: block.type === 'code' ? 'monospace' : 'inherit',

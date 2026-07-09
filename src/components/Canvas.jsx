@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -127,7 +127,7 @@ const nodeTypes = {
 const Canvas = ({ toggleSidebar }) => {
   const { 
     nodes, edges, actualNodes, actualEdges, 
-    onNodesChange, onEdgesChange, onConnect,
+    onNodesChange, onEdgesChange, onConnect, updateNodeData,
     history, historyIndex, setHistoryIndex, isTimeTraveling
   } = useWorkflow();
 
@@ -211,7 +211,7 @@ const Canvas = ({ toggleSidebar }) => {
 
   const handleRunWorkflow = async () => {
     setIsExecuting(true);
-    
+
     // Simple topological execution simulation
     // 1. Find root nodes (no incoming edges)
     const incomingEdges = {};
@@ -221,50 +221,77 @@ const Canvas = ({ toggleSidebar }) => {
     });
 
     const rootNodes = actualNodes.filter(n => !incomingEdges[n.id]);
-    
+
     if (rootNodes.length === 0) {
       alert("No valid workflow found. Please connect some nodes!");
       setIsExecuting(false);
       return;
     }
 
-    // Reset all statuses
-    actualNodes.forEach(n => updateNodeData(n.id, d => ({ ...d, status: undefined })));
+    try {
+      // Reset all statuses
+      actualNodes.forEach(n => updateNodeData(n.id, d => ({ ...d, status: undefined })));
 
-    // Simulated execution queue
-    let queue = [...rootNodes];
-    const executed = new Set();
+      // Simulated execution queue
+      let queue = [...rootNodes];
+      const executed = new Set();
 
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (executed.has(current.id)) continue;
-      
-      // Set to processing/healing
-      updateNodeData(current.id, d => ({ ...d, status: 'healing' }));
-      
-      // Simulate network/processing delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Set to success
-      updateNodeData(current.id, d => ({ ...d, status: 'success' }));
-      executed.add(current.id);
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (executed.has(current.id)) continue;
 
-      // Find children
-      const childrenEdges = actualEdges.filter(e => e.source === current.id);
-      for (const edge of childrenEdges) {
-        const targetNode = actualNodes.find(n => n.id === edge.target);
-        if (targetNode && !executed.has(targetNode.id)) {
-          // Check if all dependencies of target are met
-          const targetIncoming = incomingEdges[targetNode.id] || [];
-          const allDepsMet = targetIncoming.every(e => executed.has(e.source));
-          if (allDepsMet && !queue.includes(targetNode)) {
-            queue.push(targetNode);
+        // Set to processing/healing
+        updateNodeData(current.id, d => ({ ...d, status: 'healing' }));
+
+        if (current.type === 'agentNode') {
+          // Delegate to the backend agent-execution endpoint for real reasoning steps
+          try {
+            const response = await fetch('http://localhost:8000/api/execute-agent', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ nodes: actualNodes, edges: actualEdges })
+            });
+            const result = await response.json();
+            setDebugLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), response: result }]);
+
+            if (result.status === 'success') {
+              updateNodeData(current.id, d => ({ ...d, status: 'success', reasoning: result.agent_reasoning }));
+            } else {
+              updateNodeData(current.id, d => ({ ...d, status: 'error', reasoning: [result.message || 'Agent execution failed.'] }));
+            }
+          } catch (err) {
+            updateNodeData(current.id, d => ({ ...d, status: 'error', reasoning: ['Error: could not reach agent backend.'] }));
+          }
+        } else {
+          // Simulate network/processing delay
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          updateNodeData(current.id, d => ({ ...d, status: 'success' }));
+        }
+
+        executed.add(current.id);
+
+        // Find children
+        const childrenEdges = actualEdges.filter(e => e.source === current.id);
+        for (const edge of childrenEdges) {
+          const targetNode = actualNodes.find(n => n.id === edge.target);
+          if (targetNode && !executed.has(targetNode.id)) {
+            // Check if all dependencies of target are met
+            const targetIncoming = incomingEdges[targetNode.id] || [];
+            const allDepsMet = targetIncoming.every(e => executed.has(e.source));
+            if (allDepsMet && !queue.includes(targetNode)) {
+              queue.push(targetNode);
+            }
           }
         }
       }
-    }
 
-    setIsExecuting(false);
+      setDebugLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        response: { status: 'success', message: `Workflow completed. ${executed.size} node(s) executed.` }
+      }]);
+    } finally {
+      setIsExecuting(false);
+    }
   };
 
   return (
