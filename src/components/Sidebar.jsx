@@ -11,14 +11,16 @@ import {
   LogOut,
   X,
   File,
-  Trash2
+  Trash2,
+  Star,
+  Workflow
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePages } from '../context/PagesContext';
 
 const Sidebar = ({ isOpen, theme, toggleTheme }) => {
   const { user, logout } = useAuth();
-  const { pages, addPage, deletePage } = usePages();
+  const { pages, addPage, deletePage, toggleFavorite } = usePages();
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState('account');
@@ -60,6 +62,22 @@ const Sidebar = ({ isOpen, theme, toggleTheme }) => {
         </div>
         
         <div style={{ padding: '0 0px', flex: 1, marginTop: 4 }}>
+          {pages.filter(p => p.isFavorite).length > 0 && (
+            <>
+              <div style={{ padding: '4px 14px 4px', fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
+                FAVORITES
+              </div>
+              {pages.filter(p => p.isFavorite).map((p) => (
+                <NavLink key={`fav-${p.id}`} to={p.id === 'getting-started' ? '/' : `/page/${p.id}`} className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{p.icon || <File size={16} />}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || 'Untitled'}</span>
+                </NavLink>
+              ))}
+              <div style={{ padding: '16px 14px 4px', fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
+                PRIVATE
+              </div>
+            </>
+          )}
           {pages.map((p) => (
             <div key={p.id} className="group relative flex items-center">
               <NavLink
@@ -67,31 +85,45 @@ const Sidebar = ({ isOpen, theme, toggleTheme }) => {
                 className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}
                 style={{ flex: 1, minWidth: 0 }}
               >
-                <File size={16} />
+                <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center', flexShrink: 0 }}>{p.icon || <File size={16} />}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || 'Untitled'}</span>
               </NavLink>
-              {p.id !== 'getting-started' && (
+              <div style={{ display: 'flex', position: 'absolute', right: 8 }}>
                 <button
                   className="opacity-0 group-hover:opacity-100"
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (window.confirm(`Delete "${p.title || 'Untitled'}"? This cannot be undone.`)) {
-                      const wasActive = window.location.pathname === `/page/${p.id}`;
-                      deletePage(p.id);
-                      if (wasActive) navigate('/');
-                    }
+                    toggleFavorite(p.id);
                   }}
-                  title="Delete page"
-                  style={{ position: 'absolute', right: 8, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                  title={p.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                  style={{ background: 'transparent', border: 'none', color: p.isFavorite ? '#D9730D' : 'var(--text-secondary)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', opacity: p.isFavorite ? 1 : undefined }}
                 >
-                  <Trash2 size={14} />
+                  <Star size={13} fill={p.isFavorite ? '#D9730D' : 'none'} />
                 </button>
-              )}
+                {p.id !== 'getting-started' && (
+                  <button
+                    className="opacity-0 group-hover:opacity-100"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (window.confirm(`Delete "${p.title || 'Untitled'}"? This cannot be undone.`)) {
+                        const wasActive = window.location.pathname === `/page/${p.id}`;
+                        deletePage(p.id);
+                        if (wasActive) navigate('/');
+                      }
+                    }}
+                    title="Delete page"
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           <NavLink to="/canvas" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
-            <Share2 size={16} />
+            <Workflow size={16} />
             <span>Workflow Automation</span>
           </NavLink>
         </div>

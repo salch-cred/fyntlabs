@@ -13,7 +13,11 @@ import {
   Wand2,
   Cpu,
   RefreshCw,
-  Share2
+  Share2,
+  CheckSquare,
+  Quote,
+  Minus,
+  Megaphone
 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { 
@@ -35,15 +39,20 @@ import { usePages } from '../context/PagesContext';
 import Canvas from './Canvas'; // We will render this for the portal
 import SortableItem from './SortableItem';
 
+const PAGE_ICON_OPTIONS = ['🚀', '📄', '📝', '📌', '💡', '✅', '📊', '🎯', '🔥', '⭐', '📚', '🧠', '🛠️', '🗂️', '💬', '🌱'];
+
 const Editor = ({ toggleSidebar }) => {
   const { id } = useParams();
   const pageId = id || 'getting-started';
-  const { updatePageTitle } = usePages();
+  const { updatePageTitle, updatePageIcon, pages } = usePages();
   const { addNode, loadWorkflow } = useWorkflow();
   const [title, setTitle] = useState("Getting Started");
   const [blocks, setBlocks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [slashMenu, setSlashMenu] = useState({ show: false, x: 0, y: 0, blockId: null });
+  const [showIconPicker, setShowIconPicker] = useState(false);
+
+  const currentPageIcon = pages.find(p => p.id === pageId)?.icon || '🚀';
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -297,7 +306,32 @@ const Editor = ({ toggleSidebar }) => {
           style={{ borderRadius: 8, marginBottom: 32 }}
         />
         
-        <div className="page-icon">🚀</div>
+        <div className="page-icon" style={{ position: 'relative', cursor: 'pointer', width: 'fit-content' }} onClick={() => setShowIconPicker(!showIconPicker)}>
+          {currentPageIcon}
+          {showIconPicker && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute', top: '100%', left: 0, zIndex: 50,
+                backgroundColor: 'var(--sidebar-bg)', border: '1px solid var(--border-color)',
+                borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: 8,
+                display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, width: 176
+              }}
+            >
+              {PAGE_ICON_OPTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  onClick={() => { updatePageIcon(pageId, emoji); setShowIconPicker(false); }}
+                  style={{ fontSize: 22, background: 'transparent', border: 'none', cursor: 'pointer', borderRadius: 4, padding: 4 }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--sidebar-hover)'}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         
         <input 
           type="text" 
@@ -331,6 +365,23 @@ const Editor = ({ toggleSidebar }) => {
                   );
                 }
 
+                if (block.type === 'divider') {
+                  return (
+                    <SortableItem key={block.id} id={block.id}>
+                      <div className="flex group relative w-full items-center" style={{ padding: '8px 0' }}>
+                        <div className="opacity-0 group-hover:opacity-100 flex items-center pr-2 cursor-pointer text-gray-500">
+                          <PlusCircle size={16} onClick={() => {
+                            const newBlocks = [...blocks];
+                            newBlocks.splice(index + 1, 0, { id: `b${Date.now()}`, type: 'text', content: '' });
+                            setBlocks(newBlocks);
+                          }} />
+                        </div>
+                        <hr style={{ flex: 1, border: 'none', borderTop: '1px solid var(--border-color)' }} />
+                      </div>
+                    </SortableItem>
+                  );
+                }
+
                 return (
                   <SortableItem key={block.id} id={block.id}>
                     <div className="flex group relative w-full items-start">
@@ -351,6 +402,18 @@ const Editor = ({ toggleSidebar }) => {
                     </button>
                   )}
 
+                  {block.type === 'todo' && (
+                    <input
+                      type="checkbox"
+                      checked={!!block.checked}
+                      onChange={() => setBlocks(blocks.map(b => b.id === block.id ? { ...b, checked: !b.checked } : b))}
+                      style={{ marginTop: 6, marginRight: 8, width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent-color)', flexShrink: 0 }}
+                    />
+                  )}
+                  {block.type === 'callout' && (
+                    <span style={{ marginRight: 8, marginTop: 6, fontSize: 16, flexShrink: 0 }}>💡</span>
+                  )}
+
                   <div 
                     contentEditable
                     suppressContentEditableWarning
@@ -361,12 +424,16 @@ const Editor = ({ toggleSidebar }) => {
                       fontSize: block.type === 'h1' ? '2em' : block.type === 'h2' ? '1.5em' : '1em',
                       fontWeight: block.type === 'h1' || block.type === 'h2' ? 'bold' : 'normal',
                       fontFamily: block.type === 'code' ? 'monospace' : 'inherit',
-                      backgroundColor: block.type === 'code' ? '#1e1e1e' : 'transparent',
-                      borderRadius: block.type === 'code' ? '4px' : '0',
-                      padding: block.type === 'code' ? '12px 12px 12px 12px' : '4px 0',
+                      fontStyle: block.type === 'quote' ? 'italic' : 'normal',
+                      backgroundColor: block.type === 'code' ? '#1e1e1e' : block.type === 'callout' ? 'rgba(35, 131, 226, 0.08)' : 'transparent',
+                      borderLeft: block.type === 'quote' ? '3px solid var(--text-secondary)' : 'none',
+                      borderRadius: block.type === 'code' || block.type === 'callout' ? '4px' : '0',
+                      padding: block.type === 'code' ? '12px 12px 12px 12px' : block.type === 'quote' ? '2px 0 2px 12px' : block.type === 'callout' ? '10px 12px' : '4px 0',
                       display: block.type === 'list' ? 'list-item' : 'block',
                       listStyleType: block.type === 'list' ? 'disc' : 'none',
-                      marginLeft: block.type === 'list' ? '20px' : '0'
+                      marginLeft: block.type === 'list' ? '20px' : '0',
+                      textDecoration: block.type === 'todo' && block.checked ? 'line-through' : 'none',
+                      opacity: block.type === 'todo' && block.checked ? 0.5 : 1
                     }}
                   >
                     {block.content}
@@ -413,6 +480,10 @@ const Editor = ({ toggleSidebar }) => {
           <button onClick={() => applyFormatting('h2')} className="slash-menu-item"><Heading2 size={14} /> Heading 2</button>
           <button onClick={() => applyFormatting('list')} className="slash-menu-item"><List size={14} /> Bulleted List</button>
           <button onClick={() => applyFormatting('code')} className="slash-menu-item"><Code size={14} /> Code Block</button>
+          <button onClick={() => applyFormatting('todo')} className="slash-menu-item"><CheckSquare size={14} /> To-do</button>
+          <button onClick={() => applyFormatting('quote')} className="slash-menu-item"><Quote size={14} /> Quote</button>
+          <button onClick={() => applyFormatting('callout')} className="slash-menu-item"><Megaphone size={14} /> Callout</button>
+          <button onClick={() => applyFormatting('divider')} className="slash-menu-item"><Minus size={14} /> Divider</button>
           <div style={{ fontSize: 11, color: '#888', marginBottom: 8, marginTop: 12, paddingLeft: 8 }}>ADVANCED</div>
           <button onClick={() => applyFormatting('canvas')} className="slash-menu-item"><Cpu size={14} /> Canvas Portal</button>
         </div>

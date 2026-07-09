@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
   MiniMap,
@@ -8,18 +9,23 @@ import {
   Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Bot, FileText, Send, Play, Layout, RefreshCw, CheckCircle, AlertCircle, BrainCircuit, TerminalSquare } from 'lucide-react';
+import {
+  Bot, FileText, Send, Play, Layout, RefreshCw, CheckCircle, AlertCircle,
+  BrainCircuit, TerminalSquare, GitBranch, Clock, Trash2, Plus, ChevronDown,
+  Pencil, X, Check
+} from 'lucide-react';
 import { useWorkflow } from '../context/WorkflowContext';
 
 // Base Custom Node wrapper
-const BaseNode = ({ icon: Icon, title, children, status }) => {
+const BaseNode = ({ icon: Icon, title, children, status, selected }) => {
   let borderColor = 'var(--node-border)';
   if (status === 'error') borderColor = '#E03E3E';
   if (status === 'success') borderColor = '#0F7B6C';
   if (status === 'healing') borderColor = '#D9730D';
+  if (selected) borderColor = 'var(--accent-color)';
 
   return (
-    <div className="gumloop-node" style={{ borderColor, transition: 'border-color 0.3s ease' }}>
+    <div className="gumloop-node" style={{ borderColor, boxShadow: selected ? '0 0 0 2px var(--accent-color)' : 'none', transition: 'border-color 0.3s ease' }}>
       <Handle type="target" position={Position.Top} className="w-2 h-2" />
       <div className="gumloop-node-header justify-between">
         <div className="flex items-center gap-2">
@@ -30,13 +36,12 @@ const BaseNode = ({ icon: Icon, title, children, status }) => {
         </div>
         {status === 'error' && <AlertCircle size={14} color="#E03E3E" />}
         {status === 'success' && <CheckCircle size={14} color="#0F7B6C" />}
-        {status === 'healing' && <RefreshCw size={14} color="#D9730D" className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />}
+        {status === 'healing' && <RefreshCw size={14} color="#D9730D" className="animate-spin" />}
       </div>
       <div className="gumloop-node-content">
         {children}
       </div>
       <Handle type="source" position={Position.Bottom} className="w-2 h-2" />
-      <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
@@ -67,12 +72,31 @@ const UINode = (props) => (
   </BaseNode>
 );
 
+// Condition / Branch Node — routes execution down one of two paths
+const ConditionNode = (props) => (
+  <BaseNode icon={GitBranch} title={props.data.title || "Condition"} {...props}>
+    <div style={{ marginBottom: 8 }}>{props.data.description || 'If the condition is true, continue to the connected branch.'}</div>
+    <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+      <span style={{ padding: '2px 8px', borderRadius: 4, backgroundColor: 'rgba(15,123,108,0.15)', color: '#0F7B6C' }}>True</span>
+      <span style={{ padding: '2px 8px', borderRadius: 4, backgroundColor: 'rgba(224,62,62,0.15)', color: '#E03E3E' }}>False</span>
+    </div>
+  </BaseNode>
+);
+
+// Delay Node — pauses the workflow before continuing
+const DelayNode = (props) => (
+  <BaseNode icon={Clock} title={props.data.title || "Delay"} {...props}>
+    <div>{props.data.description || 'Wait before running the next step.'}</div>
+  </BaseNode>
+);
+
 // Self-Healing AI Node
 const AINode = (props) => {
   const { updateNodeData } = useWorkflow();
   const { id, data } = props;
 
-  const handleRun = () => {
+  const handleRun = (e) => {
+    e.stopPropagation();
     updateNodeData(id, d => ({ ...d, status: 'error', description: 'Error: API Rate Limit Exceeded' }));
     setTimeout(() => {
       updateNodeData(id, d => ({ ...d, status: 'healing', description: 'Self-Healing: Adjusting prompt and retrying...' }));
@@ -85,7 +109,7 @@ const AINode = (props) => {
   return (
     <BaseNode icon={Bot} title={props.data.title || "AI Analysis"} status={data.status} {...props}>
       <div style={{ marginBottom: 12 }}>{data.description}</div>
-      <button 
+      <button
         onClick={handleRun}
         style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '4px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, width: '100%', justifyContent: 'center' }}
       >
@@ -95,10 +119,10 @@ const AINode = (props) => {
   );
 };
 
-// NEW: n8n Agent Node
+// n8n-style Agent Node
 const AgentNode = (props) => {
   const { data } = props;
-  
+
   return (
     <BaseNode icon={BrainCircuit} title={props.data.title || "Autonomous Agent"} status={data.status} {...props}>
       <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -121,34 +145,76 @@ const nodeTypes = {
   aiNode: AINode,
   outputNode: OutputNode,
   uiNode: UINode,
-  agentNode: AgentNode
+  agentNode: AgentNode,
+  conditionNode: ConditionNode,
+  delayNode: DelayNode,
 };
 
+// Node palette — the set of node types a user can drop onto the canvas,
+// mirroring a Gumloop/n8n-style tool panel.
+const NODE_PALETTE = [
+  { type: 'triggerNode', title: 'Manual Trigger', description: 'Start the workflow manually', icon: Play },
+  { type: 'extractNode', title: 'Extract Data', description: 'Pull structured data from a source', icon: FileText },
+  { type: 'aiNode', title: 'AI Analysis', description: 'Summarize, classify, or transform text with AI', icon: Bot },
+  { type: 'agentNode', title: 'Autonomous Agent', description: 'Let an agent decide which tools to run', icon: BrainCircuit },
+  { type: 'conditionNode', title: 'Condition', description: 'Branch the workflow based on a rule', icon: GitBranch },
+  { type: 'delayNode', title: 'Delay', description: 'Wait before continuing', icon: Clock },
+  { type: 'uiNode', title: 'Interactive UI', description: 'Collect input with a generated form', icon: Layout },
+  { type: 'outputNode', title: 'Send Email', description: 'Deliver the result', icon: Send },
+];
+
 const Canvas = ({ toggleSidebar }) => {
-  const { 
-    nodes, edges, actualNodes, actualEdges, 
+  const { workflowId: routeWorkflowId } = useParams();
+  const navigate = useNavigate();
+  const {
+    nodes, edges, actualNodes, actualEdges,
     onNodesChange, onEdgesChange, onConnect, updateNodeData,
-    history, historyIndex, setHistoryIndex, isTimeTraveling
+    addNode, deleteNode, deleteEdge, persistCurrentGraph,
+    history, historyIndex, setHistoryIndex, isTimeTraveling,
+    currentWorkflowId, workflowList, switchWorkflow, createWorkflow,
+    renameWorkflow, deleteWorkflow, isLoadingGraph,
   } = useWorkflow();
 
   const [isExecuting, setIsExecuting] = useState(false);
-  
+
   // Terminal State
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalOutput, setTerminalOutput] = useState(['$ ']);
   const [terminalInput, setTerminalInput] = useState('');
   const bottomRef = useRef(null);
   const wsRef = useRef(null);
-  
+
   // Debug Logs State
   const [debugLogs, setDebugLogs] = useState([]);
   const [showDebug, setShowDebug] = useState(false);
+
+  // Node palette + node editor panel
+  const [showPalette, setShowPalette] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+
+  // Workflow switcher
+  const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
+  const [newWorkflowName, setNewWorkflowName] = useState('');
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  // Keep the WorkflowContext's "current workflow" in sync with the URL
+  useEffect(() => {
+    switchWorkflow(routeWorkflowId);
+  }, [routeWorkflowId, switchWorkflow]);
+
+  useEffect(() => {
+    setSelectedNodeId(null);
+  }, [currentWorkflowId]);
+
+  const selectedNode = actualNodes.find(n => n.id === selectedNodeId) || null;
+  const currentWorkflowMeta = workflowList.find(w => w.id === currentWorkflowId);
 
   // Initialize WebSocket connection when terminal opens
   useEffect(() => {
     if (showTerminal && !wsRef.current) {
       wsRef.current = new WebSocket('ws://localhost:8000/ws/terminal');
-      
+
       wsRef.current.onmessage = (event) => {
         const data = event.data;
         if (data === "CLEAR_TERMINAL") {
@@ -156,13 +222,12 @@ const Canvas = ({ toggleSidebar }) => {
         } else {
           setTerminalOutput(prev => {
             const newOutput = [...prev];
-            // Insert before the last '$ ' prompt
             newOutput.splice(newOutput.length - 1, 0, data);
             return newOutput;
           });
         }
       };
-      
+
       wsRef.current.onclose = () => {
         setTerminalOutput(prev => {
           const newOutput = [...prev];
@@ -172,10 +237,8 @@ const Canvas = ({ toggleSidebar }) => {
         wsRef.current = null;
       };
     }
-    
-    return () => {
-      // Cleanup happens only on unmount or if we want to explicitly close when hidden
-    };
+
+    return () => {};
   }, [showTerminal]);
 
   useEffect(() => {
@@ -187,14 +250,14 @@ const Canvas = ({ toggleSidebar }) => {
   const handleCommand = (e) => {
     if (e.key === 'Enter') {
       const cmd = terminalInput.trim();
-      
+
       setTerminalOutput(prev => {
         const newOutput = [...prev];
-        newOutput[newOutput.length - 1] += cmd; // Append cmd to the '$ ' line
-        newOutput.push('$ '); // Push new prompt
+        newOutput[newOutput.length - 1] += cmd;
+        newOutput.push('$ ');
         return newOutput;
       });
-      
+
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(cmd);
       } else {
@@ -204,16 +267,30 @@ const Canvas = ({ toggleSidebar }) => {
           return newOutput;
         });
       }
-      
+
       setTerminalInput('');
     }
+  };
+
+  const handleAddNode = (paletteItem) => {
+    const position = {
+      x: 250 + Math.round((Math.random() - 0.5) * 200),
+      y: 80 + Math.round(Math.random() * 300),
+    };
+    addNode(paletteItem.type, paletteItem.title, paletteItem.description, position);
+    setShowPalette(false);
+  };
+
+  const handleDeleteSelectedNode = () => {
+    if (!selectedNodeId) return;
+    deleteNode(selectedNodeId);
+    setSelectedNodeId(null);
   };
 
   const handleRunWorkflow = async () => {
     setIsExecuting(true);
 
     // Simple topological execution simulation
-    // 1. Find root nodes (no incoming edges)
     const incomingEdges = {};
     actualEdges.forEach(e => {
       if (!incomingEdges[e.target]) incomingEdges[e.target] = [];
@@ -229,10 +306,8 @@ const Canvas = ({ toggleSidebar }) => {
     }
 
     try {
-      // Reset all statuses
       actualNodes.forEach(n => updateNodeData(n.id, d => ({ ...d, status: undefined })));
 
-      // Simulated execution queue
       let queue = [...rootNodes];
       const executed = new Set();
 
@@ -240,11 +315,9 @@ const Canvas = ({ toggleSidebar }) => {
         const current = queue.shift();
         if (executed.has(current.id)) continue;
 
-        // Set to processing/healing
         updateNodeData(current.id, d => ({ ...d, status: 'healing' }));
 
         if (current.type === 'agentNode') {
-          // Delegate to the backend agent-execution endpoint for real reasoning steps
           try {
             const response = await fetch('http://localhost:8000/api/execute-agent', {
               method: 'POST',
@@ -262,20 +335,20 @@ const Canvas = ({ toggleSidebar }) => {
           } catch (err) {
             updateNodeData(current.id, d => ({ ...d, status: 'error', reasoning: ['Error: could not reach agent backend.'] }));
           }
+        } else if (current.type === 'delayNode') {
+          await new Promise(resolve => setTimeout(resolve, 600));
+          updateNodeData(current.id, d => ({ ...d, status: 'success' }));
         } else {
-          // Simulate network/processing delay
           await new Promise(resolve => setTimeout(resolve, 1000));
           updateNodeData(current.id, d => ({ ...d, status: 'success' }));
         }
 
         executed.add(current.id);
 
-        // Find children
         const childrenEdges = actualEdges.filter(e => e.source === current.id);
         for (const edge of childrenEdges) {
           const targetNode = actualNodes.find(n => n.id === edge.target);
           if (targetNode && !executed.has(targetNode.id)) {
-            // Check if all dependencies of target are met
             const targetIncoming = incomingEdges[targetNode.id] || [];
             const allDepsMet = targetIncoming.every(e => executed.has(e.source));
             if (allDepsMet && !queue.includes(targetNode)) {
@@ -294,23 +367,130 @@ const Canvas = ({ toggleSidebar }) => {
     }
   };
 
+  const handleCreateWorkflow = async () => {
+    const name = newWorkflowName.trim() || 'Untitled Workflow';
+    const wf = await createWorkflow(name);
+    setNewWorkflowName('');
+    setShowWorkflowMenu(false);
+    navigate(`/canvas/${wf.id}`);
+  };
+
+  const handleSelectWorkflow = (id) => {
+    setShowWorkflowMenu(false);
+    navigate(id === 'default' ? '/canvas' : `/canvas/${id}`);
+  };
+
+  const handleDeleteWorkflow = async (e, id) => {
+    e.stopPropagation();
+    if (id === 'default') return;
+    if (!window.confirm('Delete this workflow? This cannot be undone.')) return;
+    await deleteWorkflow(id);
+    if (currentWorkflowId === id) navigate('/canvas');
+  };
+
   return (
     <div className="h-full w-full flex-col relative">
       <div className="top-bar">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" style={{ position: 'relative' }}>
           <span style={{ marginLeft: toggleSidebar ? 32 : 0, color: 'var(--text-secondary)', fontSize: 14 }}>
-            Salma's Workspace / Workflow Automation
+            Salma's Workspace /
           </span>
+          <button
+            onClick={() => setShowWorkflowMenu(!showWorkflowMenu)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: 14, fontWeight: 500, cursor: 'pointer', padding: '2px 4px', borderRadius: 4 }}
+          >
+            {currentWorkflowMeta?.name || 'Workflow Automation'}
+            <ChevronDown size={14} />
+          </button>
+
+          {showWorkflowMenu && (
+            <div style={{ position: 'absolute', top: 32, left: 0, zIndex: 100, width: 280, backgroundColor: 'var(--sidebar-bg)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', padding: '4px 8px', letterSpacing: '0.5px' }}>WORKFLOWS</div>
+              {workflowList.map(w => (
+                <div
+                  key={w.id}
+                  onClick={() => handleSelectWorkflow(w.id)}
+                  className="sidebar-item"
+                  style={{ borderRadius: 6, justifyContent: 'space-between' }}
+                >
+                  {renamingId === w.id ? (
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { renameWorkflow(w.id, renameValue.trim() || w.name); setRenamingId(null); }
+                        if (e.key === 'Escape') setRenamingId(null);
+                      }}
+                      style={{ flex: 1, background: 'var(--bg-color)', border: '1px solid var(--accent-color)', borderRadius: 4, color: 'var(--text-primary)', fontSize: 13, padding: '2px 6px' }}
+                    />
+                  ) : (
+                    <span style={{ flex: 1, fontWeight: w.id === currentWorkflowId ? 600 : 400 }}>{w.name}</span>
+                  )}
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {renamingId === w.id ? (
+                      <button onClick={(e) => { e.stopPropagation(); renameWorkflow(w.id, renameValue.trim() || w.name); setRenamingId(null); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
+                        <Check size={13} />
+                      </button>
+                    ) : (
+                      <button onClick={(e) => { e.stopPropagation(); setRenamingId(w.id); setRenameValue(w.name); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                    {w.id !== 'default' && (
+                      <button onClick={(e) => handleDeleteWorkflow(e, w.id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 2 }}>
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 6, marginTop: 8, padding: '4px 4px 0' }}>
+                <input
+                  value={newWorkflowName}
+                  onChange={(e) => setNewWorkflowName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreateWorkflow(); }}
+                  placeholder="New workflow name..."
+                  style={{ flex: 1, background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: 4, color: 'var(--text-primary)', fontSize: 12, padding: '6px 8px' }}
+                />
+                <button
+                  onClick={handleCreateWorkflow}
+                  style={{ background: 'var(--accent-color)', color: 'white', border: 'none', borderRadius: 4, padding: '0 10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-4">
-          <button 
+          <button
+            onClick={() => setShowPalette(!showPalette)}
+            style={{
+              backgroundColor: showPalette ? 'var(--accent-color)' : 'transparent',
+              color: showPalette ? 'white' : 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              padding: '6px 12px',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <Plus size={14} /> Add Node
+          </button>
+
+          <button
             onClick={() => setShowDebug(!showDebug)}
-            style={{ 
-              backgroundColor: showDebug ? '#2d2d2d' : 'transparent', 
-              color: 'var(--text-primary)', 
-              border: '1px solid var(--border-color)', 
-              padding: '6px 12px', 
-              borderRadius: 6, 
+            style={{
+              backgroundColor: showDebug ? '#2d2d2d' : 'transparent',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              padding: '6px 12px',
+              borderRadius: 6,
               cursor: 'pointer',
               fontSize: 12
             }}
@@ -318,14 +498,14 @@ const Canvas = ({ toggleSidebar }) => {
             Debug Logs
           </button>
 
-          <button 
+          <button
             onClick={() => setShowTerminal(!showTerminal)}
-            style={{ 
-              backgroundColor: 'transparent', 
-              color: 'var(--text-primary)', 
-              border: '1px solid var(--border-color)', 
-              padding: '6px 12px', 
-              borderRadius: 6, 
+            style={{
+              backgroundColor: 'transparent',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              padding: '6px 12px',
+              borderRadius: 6,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -335,16 +515,16 @@ const Canvas = ({ toggleSidebar }) => {
             <TerminalSquare size={14} />
             Terminal
           </button>
-          
-          <button 
+
+          <button
             onClick={handleRunWorkflow}
             disabled={isExecuting}
-            style={{ 
-              backgroundColor: 'var(--accent-color)', 
-              color: 'white', 
-              border: 'none', 
-              padding: '6px 16px', 
-              borderRadius: 6, 
+            style={{
+              backgroundColor: 'var(--accent-color)',
+              color: 'white',
+              border: 'none',
+              padding: '6px 16px',
+              borderRadius: 6,
               fontWeight: 500,
               cursor: isExecuting ? 'not-allowed' : 'pointer',
               display: 'flex',
@@ -359,14 +539,71 @@ const Canvas = ({ toggleSidebar }) => {
         </div>
       </div>
 
+      {/* Node Palette */}
+      {showPalette && (
+        <div style={{ position: 'absolute', top: 60, left: 16, zIndex: 15, width: 260, backgroundColor: 'var(--sidebar-bg)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: 8, maxHeight: '70vh', overflowY: 'auto' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', padding: '4px 8px', letterSpacing: '0.5px' }}>ADD A NODE</div>
+          {NODE_PALETTE.map((item) => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.type}
+                onClick={() => handleAddNode(item)}
+                className="sidebar-item"
+                style={{ borderRadius: 6, alignItems: 'flex-start', padding: '8px 8px' }}
+              >
+                <div style={{ backgroundColor: 'var(--accent-color)', padding: 6, borderRadius: 6, display: 'flex', flexShrink: 0 }}>
+                  <Icon size={14} color="white" />
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 500 }}>{item.title}</div>
+                  <div style={{ fontSize: 11 }}>{item.description}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Selected Node Editor Panel */}
+      {selectedNode && (
+        <div style={{ position: 'absolute', top: 60, right: 16, zIndex: 15, width: 280, backgroundColor: 'var(--sidebar-bg)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>EDIT NODE</span>
+            <button onClick={() => setSelectedNodeId(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              <X size={16} />
+            </button>
+          </div>
+          <label style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Title</label>
+          <input
+            value={selectedNode.data.title || ''}
+            onChange={(e) => updateNodeData(selectedNode.id, d => ({ ...d, title: e.target.value }))}
+            style={{ width: '100%', padding: '6px 8px', marginBottom: 12, backgroundColor: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: 4, color: 'var(--text-primary)', fontSize: 13 }}
+          />
+          <label style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Description</label>
+          <textarea
+            value={selectedNode.data.description || ''}
+            onChange={(e) => updateNodeData(selectedNode.id, d => ({ ...d, description: e.target.value }))}
+            rows={3}
+            style={{ width: '100%', padding: '6px 8px', marginBottom: 12, backgroundColor: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: 4, color: 'var(--text-primary)', fontSize: 13, resize: 'vertical', fontFamily: 'inherit' }}
+          />
+          <button
+            onClick={handleDeleteSelectedNode}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', width: '100%', background: 'transparent', border: '1px solid #E03E3E', color: '#E03E3E', borderRadius: 4, padding: '6px 0', cursor: 'pointer', fontSize: 12 }}
+          >
+            <Trash2 size={13} /> Delete Node
+          </button>
+        </div>
+      )}
+
       {/* Time Travel Slider */}
       <div style={{ position: 'absolute', top: 80, left: '50%', transform: 'translateX(-50%)', zIndex: 10, backgroundColor: 'var(--sidebar-bg)', padding: '12px 24px', borderRadius: 24, boxShadow: 'var(--shadow-md)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: 12, width: 400 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Rewind Time</span>
-        <input 
-          type="range" 
-          min={0} 
-          max={history.length - 1} 
-          value={historyIndex} 
+        <input
+          type="range"
+          min={0}
+          max={history.length - 1}
+          value={historyIndex}
           onChange={(e) => setHistoryIndex(parseInt(e.target.value))}
           style={{ flex: 1, accentColor: 'var(--accent-color)' }}
         />
@@ -374,20 +611,25 @@ const Canvas = ({ toggleSidebar }) => {
           Step {historyIndex + 1}/{history.length}
         </span>
       </div>
-      
-      <div style={{ flex: 1, filter: isTimeTraveling ? 'grayscale(0.5) sepia(0.2)' : 'none', transition: 'filter 0.3s ease' }} className="animate-fade-in">
+
+      <div style={{ flex: 1, filter: isTimeTraveling ? 'grayscale(0.5) sepia(0.2)' : 'none', transition: 'filter 0.3s ease', opacity: isLoadingGraph ? 0.4 : 1 }} className="animate-fade-in">
         <ReactFlow
-          nodes={isTimeTraveling ? nodes : actualNodes}
+          nodes={(isTimeTraveling ? nodes : actualNodes).map(n => ({ ...n, selected: n.id === selectedNodeId }))}
           edges={isTimeTraveling ? edges : actualEdges}
           onNodesChange={isTimeTraveling ? undefined : onNodesChange}
           onEdgesChange={isTimeTraveling ? undefined : onEdgesChange}
           onConnect={isTimeTraveling ? undefined : onConnect}
+          onNodeClick={isTimeTraveling ? undefined : (_, node) => setSelectedNodeId(node.id)}
+          onPaneClick={() => setSelectedNodeId(null)}
+          onNodeDragStop={isTimeTraveling ? undefined : persistCurrentGraph}
+          onNodesDelete={isTimeTraveling ? undefined : () => { setSelectedNodeId(null); persistCurrentGraph(); }}
+          onEdgesDelete={isTimeTraveling ? undefined : persistCurrentGraph}
           nodeTypes={nodeTypes}
           fitView
           className="bg-transparent"
         >
           <Controls />
-          <MiniMap 
+          <MiniMap
             nodeColor={() => 'var(--node-border)'}
             maskColor="rgba(0, 0, 0, 0.1)"
             style={{ backgroundColor: 'var(--bg-color)' }}
@@ -432,7 +674,7 @@ const Canvas = ({ toggleSidebar }) => {
                 {i === terminalOutput.length - 1 ? (
                   <div style={{ display: 'flex' }}>
                     <span style={{ color: '#89d185', marginRight: 8 }}>{line}</span>
-                    <input 
+                    <input
                       type="text"
                       value={terminalInput}
                       onChange={(e) => setTerminalInput(e.target.value)}
